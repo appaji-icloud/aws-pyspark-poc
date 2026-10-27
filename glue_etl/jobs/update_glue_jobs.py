@@ -5,6 +5,7 @@ import sys
 REGION = "ap-south-2"
 BUCKET = "scala-spark-2026-670322850061-ap-south-2-an"
 PREFIX = "Glue_Scripts"
+ROLE = "arn:aws:iam::670322850061:role/YouTubeETLGlueExecutionRole"
 DEPS = "s3://" + BUCKET + "/" + PREFIX + "/glue_dependencies.zip"
 
 jobs = [
@@ -24,6 +25,7 @@ jobs = [
 
 for job in jobs:
     job_update = {
+        "Role": ROLE,
         "Command": {
             "Name": "glueetl",
             "ScriptLocation": job["script_location"],
