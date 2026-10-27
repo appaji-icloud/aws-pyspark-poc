@@ -26,6 +26,10 @@ phases:
 
   build:
     commands:
+      - echo "Repacking dependencies zip"
+      - cd glue_etl
+      - zip -r ../glue_dependencies.zip common/ constants/ exceptions/ configuration/ dimensions/ facts/ ingestion/ monitoring/ output/ transformation/ validation/ __init__.py pipeline_orchestrator.py
+      - cd ..
       - echo "Uploading scripts to S3"
       - aws s3 cp glue_etl/jobs/raw_to_processed.py s3://${BUCKET}/${PREFIX}/yt_raw_to_processed.py --region ${REGION}
       - aws s3 cp glue_etl/jobs/processed_to_curated.py s3://${BUCKET}/${PREFIX}/processed_to_curated.py --region ${REGION}
