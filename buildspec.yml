@@ -1,0 +1,34 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing dependencies..."
+      - pip install boto3 --quiet
+
+  pre_build:
+    commands:
+      - echo "Validating Python scripts..."
+      - for f in jobs/*.py; do python -m py_compile "$f" && echo "$f OK"; done
+      - echo "All scripts validated."
+
+  build:
+    commands:
+      - echo "Uploading Glue scripts to S3..."
+      - aws s3 sync jobs/ s3://${GLUE_SCRIPTS_BUCKET}/scripts/ --delete
+      - echo "Updating Glue job..."
+      - |
+        aws glue update-job \
+          --job-name ${GLUE_JOB_NAME} \
+          --job-update "{
+            \"Command\": {
+              \"Name\": \"glueetl\",
+              \"ScriptLocation\": \"s3://${GLUE_SCRIPTS_BUCKET}/scripts/pyspark_job.py\",
+              \"PythonVersion\": \"3\"
+            },
+            \"DefaultArguments\": {
+              \"--job-language\": \"python\",
+              \"--enable-metrics\": \"true\",
+  
