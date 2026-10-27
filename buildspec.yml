@@ -1,34 +1,50 @@
 version: 0.2
 
+env:
+  variables:
+    REGION: "ap-south-2"
+
 phases:
   install:
     runtime-versions:
       python: 3.11
     commands:
-      - echo "Installing dependencies..."
+      - echo "Installing boto3..."
       - pip install boto3 --quiet
 
   pre_build:
     commands:
       - echo "Validating Python scripts..."
-      - for f in jobs/*.py; do python -m py_compile "$f" && echo "$f OK"; done
-      - echo "All scripts validated."
+      - for f in glue_scripts/*.py; do python -m py_compile "$f" && echo "$f - OK"; done
+      - echo "All scripts validated successfully."
 
   build:
     commands:
-      - echo "Uploading Glue scripts to S3..."
-      - aws s3 sync jobs/ s3://${GLUE_SCRIPTS_BUCKET}/scripts/ --delete
-      - echo "Updating Glue job..."
+      - echo "Syncing scripts from GitHub to S3..."
+      - aws s3 sync glue_scripts/ s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/ --delete --region ${REGION}
+      - echo "Scripts uploaded to S3 successfully."
+      - echo "Updating Glue job to point to latest script..."
       - |
         aws glue update-job \
           --job-name ${GLUE_JOB_NAME} \
+          --region ${REGION} \
           --job-update "{
             \"Command\": {
               \"Name\": \"glueetl\",
-              \"ScriptLocation\": \"s3://${GLUE_SCRIPTS_BUCKET}/scripts/pyspark_job.py\",
+              \"ScriptLocation\": \"s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/${GLUE_SCRIPT_FILE}\",
               \"PythonVersion\": \"3\"
             },
+            \"GlueVersion\": \"${GLUE_VERSION}\",
+            \"WorkerType\": \"${WORKER_TYPE}\",
+            \"NumberOfWorkers\": ${NUM_WORKERS},
             \"DefaultArguments\": {
               \"--job-language\": \"python\",
-              \"--enable-metrics\": \"true\",
-  
+              \"--enable-metrics\": \"\",
+              \"--enable-continuous-cloudwatch-log\": \"true\"
+            }
+          }"
+
+  post_build:
+    commands:
+      - echo "Deployment complete at $(date)"
+      - echo "Glue job [${GLUE_JOB_NAME}] updated with script s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/${GLUE_SCRIPT_FILE}"
