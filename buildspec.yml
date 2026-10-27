@@ -3,48 +3,99 @@ version: 0.2
 env:
   variables:
     REGION: "ap-south-2"
+    BUCKET: "scala-spark-2026-670322850061-ap-south-2-an"
+    PREFIX: "Glue_Scripts"
 
 phases:
   install:
     runtime-versions:
       python: 3.11
     commands:
-      - echo "Installing boto3..."
       - pip install boto3 --quiet
 
   pre_build:
     commands:
-      - echo "Validating Python scripts..."
-      - for f in glue_scripts/*.py; do python -m py_compile "$f" && echo "$f - OK"; done
-      - echo "All scripts validated successfully."
+      - echo "=== Validating scripts ==="
+      - python -m py_compile glue_etl/jobs/raw_to_processed.py    && echo "  OK - raw_to_processed.py"
+      - python -m py_compile glue_etl/jobs/processed_to_curated.py && echo "  OK - processed_to_curated.py"
+      - python -m py_compile glue_etl/jobs/curated_fact.py         && echo "  OK - curated_fact.py"
+      - echo "=== All scripts valid ==="
 
   build:
     commands:
-      - echo "Syncing scripts from GitHub to S3..."
-      - aws s3 sync glue_scripts/ s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/ --delete --region ${REGION}
-      - echo "Scripts uploaded to S3 successfully."
-      - echo "Updating Glue job to point to latest script..."
+      - echo "=== Uploading scripts to S3 ==="
+
+      - aws s3 cp glue_etl/jobs/raw_to_processed.py
+            s3://${BUCKET}/${PREFIX}/yt_raw_to_processed.py --region ${REGION}
+
+      - aws s3 cp glue_etl/jobs/processed_to_curated.py
+            s3://${BUCKET}/${PREFIX}/processed_to_curated.py --region ${REGION}
+
+      - aws s3 cp glue_etl/jobs/curated_fact.py
+            s3://${BUCKET}/${PREFIX}/yt-ccurated_fact.py --region ${REGION}
+
+      - aws s3 cp glue_dependencies.zip
+            s3://${BUCKET}/${PREFIX}/glue_dependencies.zip --region ${REGION}
+
+      - echo "=== Updating Glue jobs ==="
       - |
-        aws glue update-job \
-          --job-name ${GLUE_JOB_NAME} \
-          --region ${REGION} \
-          --job-update "{
-            \"Command\": {
-              \"Name\": \"glueetl\",
-              \"ScriptLocation\": \"s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/${GLUE_SCRIPT_FILE}\",
-              \"PythonVersion\": \"3\"
+        python3 - <<'EOF'
+        import json, subprocess
+
+        REGION = "ap-south-2"
+        BUCKET = "scala-spark-2026-670322850061-ap-south-2-an"
+        PREFIX = "Glue_Scripts"
+        DEPS   = f"s3://{BUCKET}/{PREFIX}/glue_dependencies.zip"
+
+        jobs = [
+            {
+                "job_name":        "yt_raw_to_processed",
+                "script_location": f"s3://{BUCKET}/{PREFIX}/yt_raw_to_processed.py"
             },
-            \"GlueVersion\": \"${GLUE_VERSION}\",
-            \"WorkerType\": \"${WORKER_TYPE}\",
-            \"NumberOfWorkers\": ${NUM_WORKERS},
-            \"DefaultArguments\": {
-              \"--job-language\": \"python\",
-              \"--enable-metrics\": \"\",
-              \"--enable-continuous-cloudwatch-log\": \"true\"
+            {
+                "job_name":        "yt-processed_to_curated",
+                "script_location": f"s3://{BUCKET}/{PREFIX}/processed_to_curated.py"
+            },
+            {
+                "job_name":        "yt-ccurated_fact",
+                "script_location": f"s3://{BUCKET}/{PREFIX}/yt-ccurated_fact.py"
             }
-          }"
+        ]
+
+        for job in jobs:
+            job_update = {
+                "Command": {
+                    "Name": "glueetl",
+                    "ScriptLocation": job["script_location"],
+                    "PythonVersion": "3"
+                },
+                "GlueVersion": "5.1",
+                "WorkerType": "G.1X",
+                "NumberOfWorkers": 2,
+                "DefaultArguments": {
+                    "--job-language": "python",
+                    "--enable-metrics": "",
+                    "--enable-continuous-cloudwatch-log": "true",
+                    "--extra-py-files": DEPS
+                }
+            }
+            result = subprocess.run(
+                ["aws", "glue", "update-job",
+                 "--job-name", job["job_name"],
+                 "--region", REGION,
+                 "--job-update", json.dumps(job_update)],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                print(f"  SUCCESS: {job['job_name']}")
+            else:
+                print(f"  FAILED:  {job['job_name']} - {result.stderr}")
+                exit(1)
+
+        print("All 3 Glue jobs updated successfully.")
+        EOF
 
   post_build:
     commands:
-      - echo "Deployment complete at $(date)"
-      - echo "Glue job [${GLUE_JOB_NAME}] updated with script s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/${GLUE_SCRIPT_FILE}"
+      - echo "=== Deployment complete at $(date) ==="
+      - echo "Jobs updated: yt_raw_to_processed | yt-processed_to_curated | yt-ccurated_fact"
