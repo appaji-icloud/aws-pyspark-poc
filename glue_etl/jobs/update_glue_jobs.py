@@ -1,39 +1,58 @@
-version: 0.2
+import json
+import subprocess
+import sys
 
-env:
-  variables:
-    REGION: "ap-south-2"
-    BUCKET: "scala-spark-2026-670322850061-ap-south-2-an"
-    PREFIX: "Glue_Scripts"
+REGION = "ap-south-2"
+BUCKET = "scala-spark-2026-670322850061-ap-south-2-an"
+PREFIX = "Glue_Scripts"
+DEPS = "s3://" + BUCKET + "/" + PREFIX + "/glue_dependencies.zip"
 
-phases:
-  install:
-    runtime-versions:
-      python: 3.11
-    commands:
-      - pip install boto3 --quiet
+jobs = [
+    {
+        "job_name": "yt_raw_to_processed",
+        "script_location": "s3://" + BUCKET + "/" + PREFIX + "/yt_raw_to_processed.py"
+    },
+    {
+        "job_name": "yt-processed_to_curated",
+        "script_location": "s3://" + BUCKET + "/" + PREFIX + "/processed_to_curated.py"
+    },
+    {
+        "job_name": "yt-ccurated_fact",
+        "script_location": "s3://" + BUCKET + "/" + PREFIX + "/yt-ccurated_fact.py"
+    }
+]
 
-  pre_build:
-    commands:
-      - echo "Validating scripts"
-      - python -m py_compile glue_etl/jobs/raw_to_processed.py
-      - echo "OK - raw_to_processed.py"
-      - python -m py_compile glue_etl/jobs/processed_to_curated.py
-      - echo "OK - processed_to_curated.py"
-      - python -m py_compile glue_etl/jobs/curated_fact.py
-      - echo "OK - curated_fact.py"
-      - echo "All scripts valid"
+for job in jobs:
+    job_update = {
+        "Command": {
+            "Name": "glueetl",
+            "ScriptLocation": job["script_location"],
+            "PythonVersion": "3"
+        },
+        "GlueVersion": "5.1",
+        "WorkerType": "G.1X",
+        "NumberOfWorkers": 2,
+        "DefaultArguments": {
+            "--job-language": "python",
+            "--enable-metrics": "",
+            "--enable-continuous-cloudwatch-log": "true",
+            "--extra-py-files": DEPS
+        }
+    }
+    result = subprocess.run(
+        [
+            "aws", "glue", "update-job",
+            "--job-name", job["job_name"],
+            "--region", REGION,
+            "--job-update", json.dumps(job_update)
+        ],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        print("  SUCCESS: " + job["job_name"])
+    else:
+        print("  FAILED:  " + job["job_name"] + " - " + result.stderr)
+        sys.exit(1)
 
-  build:
-    commands:
-      - echo "Uploading scripts to S3"
-      - aws s3 cp glue_etl/jobs/raw_to_processed.py s3://${BUCKET}/${PREFIX}/yt_raw_to_processed.py --region ${REGION}
-      - aws s3 cp glue_etl/jobs/processed_to_curated.py s3://${BUCKET}/${PREFIX}/processed_to_curated.py --region ${REGION}
-      - aws s3 cp glue_etl/jobs/curated_fact.py s3://${BUCKET}/${PREFIX}/yt-ccurated_fact.py --region ${REGION}
-      - aws s3 cp glue_dependencies.zip s3://${BUCKET}/${PREFIX}/glue_dependencies.zip --region ${REGION}
-      - echo "Updating Glue jobs"
-      - python3 glue_etl/jobs/update_glue_jobs.py
-
-  post_build:
-    commands:
-      - echo "Deployment complete"
+print("All 3 Glue jobs updated successfully.")
